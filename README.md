@@ -1,23 +1,56 @@
 # Аким на 5 часов
 
-An AI-powered city management simulator, planned as a small hackathon MVP. This repository currently contains project scaffolding only; application behavior has not been implemented.
+Рабочий MVP AI-симулятора управления условной Астаной. Игрок выбирает **ровно пять** мероприятий из каталога и распределяет одинаковый для всех бюджет — 100 условных единиц. Сервер валидирует сценарий, моделирует результат через 8 кварталов и возвращает Astana Quality of Life Score, изменения по районам, сильные стороны, риски и рекомендации.
 
-## Planned scope
+Числа считает детерминированная модель. AI/LLM может объяснять уже рассчитанные данные, но не может «придумать» балл или эффект меры.
 
-The simulator is planned to model five development categories: transport, green infrastructure, social infrastructure, safety, and city services. Future simulation inputs may include a fixed virtual budget, districts and their indicators, and initiatives with costs and effects. The planned deterministic simulation will produce an Astana Quality of Life Score and results for later AI analysis.
+## Что реализовано
 
-## Project layout
+- 5 районов и 14 синтетических мероприятий из задания;
+- бюджет 100, ровно 5 решений, запрет повторов и не более двух мер одного направления;
+- проверка района для районных/городских мер, несовместимостей и лимита бюджета;
+- лаг эффекта на горизонте 8 кварталов, ограничения значений 0–100 и три синергии;
+- формула AQoL: средний городской результат, защита слабейшего района и штраф за критические показатели;
+- объяснение компромиссов, которое можно отдать LLM для естественной формулировки.
 
-- `backend/` — Go API entry point and backend code.
-- `ai/` — Python package for future analysis of simulation results.
-- `data/synthetic/` — synthetic city datasets used during development.
-- `tests/` — backend and AI test locations.
-- `config/` — local, non-secret project configuration templates.
+## Структура
 
-The scaffold intentionally has no web framework, database, container setup, or external service dependencies.
+- `backend/internal/simulation/` — данные, валидатор, формула и тесты модели.
+- `backend/cmd/api/` — HTTP API без внешних зависимостей.
+- `ai/` — место для подключения внешней LLM; для корректности расчёта она не требуется.
 
-## Development
+## Быстрый запуск
 
-- Go module: `backend/go.mod`
-- Python module: `ai/pyproject.toml`
+Нужен Go 1.22+.
 
+```bash
+cd backend
+go test ./...
+go run ./cmd/api
+```
+
+API станет доступен на `http://localhost:8080`.
+
+## API
+
+`GET /api/catalog` возвращает одинаковый для всех набор районов, мероприятий и бюджет.
+
+`POST /api/simulate` принимает выбор игрока:
+
+```json
+{
+  "choices": [
+    {"initiative_id":"M7", "district_id":"nura"},
+    {"initiative_id":"M8", "district_id":"nura"},
+    {"initiative_id":"M10", "district_id":"nura"},
+    {"initiative_id":"M12"},
+    {"initiative_id":"M5", "district_id":"saryarka"}
+  ]
+}
+```
+
+Это пример из задания: стоимость — 95, прогнозный Score — около 56.5. При нарушении правил сервер отвечает `422` с конкретной причиной, а Score не рассчитывается.
+
+## Модель
+
+Для каждой меры применяется доля эффекта `(8 − lag) / 8`; затем накладываются фиксированные синергии и значения ограничиваются диапазоном 0–100. Районный балл — взвешенная сумма десяти метрик. Итог: `0.7 × средний балл + 0.3 × минимум по районам − число показателей < 40`.
