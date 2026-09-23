@@ -71,11 +71,12 @@ func main() {
 			jsonResponse(w, 200, map[string]any{"ok": false, "error": "AI analysis is temporarily unavailable."})
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 		defer cancel()
 		analysis, err := aiClient.Analyze(ctx, body.Result)
 		if err != nil {
-			jsonResponse(w, 200, map[string]any{"ok": false, "error": "AI analysis is temporarily unavailable."})
+			log.Printf("AI analysis failed: %v", err)
+			jsonResponse(w, 200, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
 		jsonResponse(w, 200, map[string]any{"ok": true, "analysis": analysis})

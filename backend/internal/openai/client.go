@@ -31,13 +31,6 @@ type Client struct {
 	baseURL    string
 }
 
-type responsesRequest struct {
-	Model          string         `json:"model"`
-	Input          any            `json:"input"`
-	Temperature    float64        `json:"temperature,omitempty"`
-	ResponseFormat map[string]any `json:"response_format,omitempty"`
-}
-
 type responseTextItem struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -59,12 +52,12 @@ func NewClientFromEnv() (*Client, error) {
 	}
 	model := strings.TrimSpace(os.Getenv("OPENAI_MODEL"))
 	if model == "" {
-		model = "gpt-4.1-mini"
+		model = "gpt-4o-mini"
 	}
 	return &Client{
 		apiKey:     key,
 		model:      model,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: &http.Client{Timeout: 45 * time.Second},
 		baseURL:    "https://api.openai.com/v1",
 	}, nil
 }
@@ -75,17 +68,16 @@ func (c *Client) Analyze(ctx context.Context, result simulation.Result) (Analysi
 		"input": []map[string]any{
 			{
 				"role":    "system",
-				"content": "You are an analytical advisor for a synthetic city-management simulator called 'Аким на 5 часов'. The numerical simulation has already been calculated by a deterministic engine. Your job is ONLY to interpret the supplied simulation result. Use only facts present in the supplied data. Never invent numbers. Never recalculate or replace Astana Quality of Life Score, district scores, indicator values, budget, initiative effects, or synergy effects. Analyze the strategy and explain: 1. overall result; 2. strengths; 3. remaining risks; 4. important trade-offs; 5. activated synergies; 6. possible alternative strategic directions. Do not claim that this synthetic simulator predicts actual real-world outcomes for Astana. Keep the analysis concise, specific, and grounded in the supplied simulation data.",
+				"content": "Ты — аналитик синтетического симулятора управления городом «Аким на 5 часов». Числовой результат уже рассчитан детерминированной моделью. Твоя задача — ТОЛЬКО интерпретировать переданный результат. Используй только факты из данных. Не придумывай числа и не пересчитывай Astana Quality of Life Score, баллы районов, показатели, бюджет, эффекты мер или синергии. Напиши ответ СТРОГО НА РУССКОМ ЯЗЫКЕ. Кратко и предметно опиши: 1) общий итог; 2) сильные стороны; 3) оставшиеся риски; 4) важные компромиссы; 5) сработавшие синергии; 6) рекомендации. Не утверждай, что синтетический симулятор предсказывает реальные последствия для Астаны.",
 			},
 			{
 				"role":    "user",
 				"content": []map[string]any{{"type": "input_text", "text": compactSimulationPrompt(result)}},
 			},
 		},
-		"temperature": 0.2,
-		"response_format": map[string]any{
-			"type": "json_schema",
-			"json_schema": map[string]any{
+		"text": map[string]any{
+			"format": map[string]any{
+				"type":   "json_schema",
 				"name":   "city_analysis",
 				"strict": true,
 				"schema": map[string]any{
@@ -128,7 +120,11 @@ func (c *Client) Analyze(ctx context.Context, result simulation.Result) (Analysi
 		return Analysis{}, fmt.Errorf("read OpenAI response: %w", err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return Analysis{}, fmt.Errorf("OpenAI API error: status %d", resp.StatusCode)
+		message := strings.TrimSpace(string(data))
+		if len(message) > 600 {
+			message = message[:600] + "…"
+		}
+		return Analysis{}, fmt.Errorf("OpenAI API error (%s): %s", resp.Status, message)
 	}
 
 	var apiResp responsesAPIResponse
