@@ -4,6 +4,8 @@
 package simulation
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -11,56 +13,74 @@ import (
 
 const Budget = 100
 
-type Metrics struct{ T1, T2, E1, E2, S1, S2, B1, B2, C1, C2 float64 }
+type Metrics struct {
+	T1 float64 `json:"t1"`
+	T2 float64 `json:"t2"`
+	E1 float64 `json:"e1"`
+	E2 float64 `json:"e2"`
+	S1 float64 `json:"s1"`
+	S2 float64 `json:"s2"`
+	B1 float64 `json:"b1"`
+	B2 float64 `json:"b2"`
+	C1 float64 `json:"c1"`
+	C2 float64 `json:"c2"`
+}
 type District struct {
-	ID, Name, Profile string
-	Population        float64
-	Metrics           Metrics
+	ID         string  `json:"id"`
+	Name       string  `json:"name"`
+	Profile    string  `json:"profile"`
+	Population float64 `json:"population"`
+	Metrics    Metrics `json:"metrics"`
 }
 type Initiative struct {
-	ID, Direction, Name, Scope string
-	Cost, Lag                  int
-	Effects                    Metrics
+	ID        string  `json:"id"`
+	Direction string  `json:"direction"`
+	Name      string  `json:"name"`
+	Scope     string  `json:"scope"`
+	Cost      int     `json:"cost"`
+	Lag       int     `json:"lag"`
+	Effects   Metrics `json:"effects"`
 }
 type Choice struct {
 	InitiativeID string `json:"initiative_id"`
 	DistrictID   string `json:"district_id,omitempty"`
 }
 type DistrictResult struct {
-	ID, Name      string
-	Before, After Metrics
-	Score         float64
+	ID     string  `json:"id"`
+	Name   string  `json:"name"`
+	Before Metrics `json:"before"`
+	After  Metrics `json:"after"`
+	Score  float64 `json:"score"`
 }
 type Result struct {
-	Budget, Spent, Remaining          int
-	Score, BaselineScore, Delta       float64
-	CriticalCount                     int
-	Districts                         []DistrictResult
-	Strengths, Risks, Recommendations []string
+	Budget          int              `json:"budget"`
+	Spent           int              `json:"spent"`
+	Remaining       int              `json:"remaining"`
+	Score           float64          `json:"score"`
+	BaselineScore   float64          `json:"baseline_score"`
+	Delta           float64          `json:"delta"`
+	CriticalCount   int              `json:"critical_count"`
+	Districts       []DistrictResult `json:"districts"`
+	Strengths       []string         `json:"strengths"`
+	Risks           []string         `json:"risks"`
+	Recommendations []string         `json:"recommendations"`
 }
 
-var Districts = []District{
-	{"esil", "Есиль", "Пробки на мостах и переполненные школы.", .27, Metrics{45, 62, 68, 72, 48, 55, 78, 60, 75, 70}},
-	{"almaty", "Алматы", "Старый ЖКХ и пробки.", .24, Metrics{40, 75, 50, 55, 60, 65, 62, 52, 50, 60}},
-	{"saryarka", "Сарыарка", "Смог от частного сектора, слабое озеленение.", .20, Metrics{50, 70, 42, 40, 62, 68, 58, 55, 45, 55}},
-	{"baikonyur", "Байконур", "Район без ярких перекосов.", .13, Metrics{52, 68, 55, 50, 58, 60, 52, 58, 55, 58}},
-	{"nura", "Нура", "Главный аутсайдер по соцсфере и транспорту.", .16, Metrics{55, 40, 45, 65, 38, 35, 55, 50, 60, 50}},
+type dataset struct {
+	Districts   []District   `json:"districts"`
+	Initiatives []Initiative `json:"initiatives"`
 }
-var Initiatives = []Initiative{
-	{"M1", "transport", "Выделенные полосы для автобусов", "district", 18, 2, Metrics{T1: 6, T2: 9}},
-	{"M2", "transport", "Умные светофоры", "city", 22, 2, Metrics{T1: 4, B2: 3}},
-	{"M3", "transport", "Линия ЛРТ / расширение", "district", 30, 4, Metrics{T1: 16, T2: 20, E2: 4}},
-	{"M4", "green", "Парк / сквер", "district", 15, 2, Metrics{E1: 12, E2: 3, B1: 2}},
-	{"M5", "green", "Чистое топливо для частного сектора", "district", 25, 3, Metrics{E2: 14, C1: 4}},
-	{"M6", "green", "Озеленение и ветрозащитные полосы", "city", 20, 4, Metrics{E1: 5, E2: 3}},
-	{"M7", "social", "Школа + детсад", "district", 24, 3, Metrics{S1: 16}},
-	{"M8", "social", "Центр семейного здоровья / поликлиника", "district", 20, 3, Metrics{S2: 14}},
-	{"M9", "social", "Дворовые спорт-хабы", "district", 10, 1, Metrics{S1: 3, S2: 3, B1: 3}},
-	{"M10", "safety", "Освещение и камеры Safe City", "district", 12, 1, Metrics{B1: 12, B2: 2}},
-	{"M11", "safety", "Безопасные переходы и школьные зоны", "district", 10, 1, Metrics{T1: -2, B2: 12}},
-	{"M12", "services", "Цифровая платформа обращений", "city", 14, 1, Metrics{C2: 5}},
-	{"M13", "services", "Модернизация тепло- и водосетей", "district", 28, 4, Metrics{C1: 18, E2: 2}},
-	{"M14", "services", "Аварийные бригады ЖКХ", "city", 16, 1, Metrics{C1: 5, C2: 2}},
+
+//go:embed data/city.json
+var rawDataset []byte
+var Districts, Initiatives = loadDataset()
+
+func loadDataset() ([]District, []Initiative) {
+	var d dataset
+	if err := json.Unmarshal(rawDataset, &d); err != nil {
+		panic("invalid embedded city dataset: " + err.Error())
+	}
+	return d.Districts, d.Initiatives
 }
 
 func catalog() map[string]Initiative {
