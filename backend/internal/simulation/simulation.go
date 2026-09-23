@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 )
 
 const Budget = 100
@@ -45,25 +46,38 @@ type Choice struct {
 	InitiativeID string `json:"initiative_id"`
 	DistrictID   string `json:"district_id,omitempty"`
 }
+type Synergy struct {
+	Initiatives []string `json:"initiatives"`
+	District    string   `json:"district"`
+	Indicator   string   `json:"indicator"`
+	Bonus       float64  `json:"bonus"`
+}
 type DistrictResult struct {
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Before Metrics `json:"before"`
-	After  Metrics `json:"after"`
-	Score  float64 `json:"score"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name"`
+	PopulationShare float64 `json:"population_share"`
+	Before          Metrics `json:"before"`
+	After           Metrics `json:"after"`
+	Score           float64 `json:"score"`
+	Delta           float64 `json:"delta"`
 }
 type Result struct {
-	Budget          int              `json:"budget"`
-	Spent           int              `json:"spent"`
-	Remaining       int              `json:"remaining"`
-	Score           float64          `json:"score"`
-	BaselineScore   float64          `json:"baseline_score"`
-	Delta           float64          `json:"delta"`
-	CriticalCount   int              `json:"critical_count"`
-	Districts       []DistrictResult `json:"districts"`
-	Strengths       []string         `json:"strengths"`
-	Risks           []string         `json:"risks"`
-	Recommendations []string         `json:"recommendations"`
+	Budget           int              `json:"budget"`
+	Spent            int              `json:"spent"`
+	Remaining        int              `json:"remaining"`
+	Score            float64          `json:"score"`
+	BaselineScore    float64          `json:"baseline_score"`
+	Delta            float64          `json:"delta"`
+	CriticalCount    int              `json:"critical_count"`
+	BaselineCritical int              `json:"baseline_critical_count,omitempty"`
+	Selected         []Choice         `json:"selected,omitempty"`
+	Districts        []DistrictResult `json:"districts"`
+	Strengths        []string         `json:"strengths"`
+	Risks            []string         `json:"risks"`
+	Recommendations  []string         `json:"recommendations"`
+	Synergies        []Synergy        `json:"synergies,omitempty"`
+	Valid            bool             `json:"valid"`
+	ValidationErrors []string         `json:"validation_errors,omitempty"`
 }
 
 type dataset struct {
@@ -83,16 +97,24 @@ func loadDataset() ([]District, []Initiative) {
 	return d.Districts, d.Initiatives
 }
 
+func normalizeDistrictID(id string) string {
+	return strings.ToLower(strings.TrimSpace(id))
+}
+func normalizeInitiativeID(id string) string {
+	return strings.ToUpper(strings.TrimSpace(id))
+}
+
 func catalog() map[string]Initiative {
 	r := map[string]Initiative{}
 	for _, x := range Initiatives {
-		r[x.ID] = x
+		r[normalizeInitiativeID(x.ID)] = x
 	}
 	return r
 }
 func findDistrict(id string) (int, bool) {
+	normalized := normalizeDistrictID(id)
 	for i, d := range Districts {
-		if d.ID == id {
+		if normalizeDistrictID(d.ID) == normalized {
 			return i, true
 		}
 	}
@@ -129,16 +151,17 @@ func critical(m Metrics) int {
 	return n
 }
 func cityScore(ms []Metrics) (float64, int) {
-	avg, min, crit := 0.0, 101.0, 0
+	avg, minScore := 0.0, math.Inf(1)
+	crit := 0
 	for i, m := range ms {
 		s := districtScore(m)
 		avg += Districts[i].Population * s
-		if s < min {
-			min = s
+		if s < minScore {
+			minScore = s
 		}
 		crit += critical(m)
 	}
-	return .7*avg + .3*min - float64(crit), crit
+	return .7*avg + .3*minScore - float64(crit), crit
 }
 
 // Validate checks every business rule before calculations begin.
@@ -152,10 +175,13 @@ func Validate(choices []Choice) ([]Initiative, error) {
 	chosen := map[string]Choice{}
 	total := 0
 	for _, c := range choices {
-		x, ok := cat[c.InitiativeID]
+		id := normalizeInitiativeID(c.InitiativeID)
+		x, ok := cat[id]
 		if !ok {
 			return nil, fmt.Errorf("неизвестное мероприятие %q", c.InitiativeID)
 		}
+		c.InitiativeID = x.ID
+		c.DistrictID = normalizeDistrictID(c.DistrictID)
 		if seen[x.ID] {
 			return nil, fmt.Errorf("мероприятие %s выбрано повторно", x.ID)
 		}
@@ -167,6 +193,9 @@ func Validate(choices []Choice) ([]Initiative, error) {
 		}
 		total += x.Cost
 		if x.Scope == "district" {
+			if c.DistrictID == "" {
+				return nil, fmt.Errorf("для %s укажите район", x.ID)
+			}
 			if _, ok := findDistrict(c.DistrictID); !ok {
 				return nil, fmt.Errorf("для %s укажите существующий район", x.ID)
 			}
@@ -181,13 +210,13 @@ func Validate(choices []Choice) ([]Initiative, error) {
 		return nil, fmt.Errorf("M1 и M3 несовместимы")
 	}
 	for _, pair := range [][2]string{{"M4", "M7"}, {"M5", "M13"}} {
-		if seen[pair[0]] && seen[pair[1]] && chosen[pair[0]].DistrictID == chosen[pair[1]].DistrictID {
+		if seen[pair[0]] && seen[pair[1]] && normalizeDistrictID(chosen[pair[0]].DistrictID) == normalizeDistrictID(chosen[pair[1]].DistrictID) {
 			return nil, fmt.Errorf("%s и %s нельзя размещать в одном районе", pair[0], pair[1])
 		}
 	}
 	items := make([]Initiative, 0, 5)
 	for _, c := range choices {
-		items = append(items, cat[c.InitiativeID])
+		items = append(items, cat[normalizeInitiativeID(c.InitiativeID)])
 	}
 	return items, nil
 }
@@ -195,7 +224,7 @@ func Validate(choices []Choice) ([]Initiative, error) {
 func Simulate(choices []Choice) (Result, error) {
 	items, err := Validate(choices)
 	if err != nil {
-		return Result{}, err
+		return Result{Valid: false, ValidationErrors: []string{err.Error()}}, err
 	}
 	after := make([]Metrics, len(Districts))
 	before := make([]Metrics, len(Districts))
@@ -216,19 +245,43 @@ func Simulate(choices []Choice) (Result, error) {
 			add(&after[d], x.Effects, k)
 		}
 	}
-	// Fixed, non-lagged synergy bonuses target the district of the first district-level measure.
 	lookup := map[string]Choice{}
 	for _, c := range choices {
-		lookup[c.InitiativeID] = c
+		lookup[normalizeInitiativeID(c.InitiativeID)] = c
 	}
+	synergies := make([]Synergy, 0)
 	for _, s := range []struct {
-		a, b string
-		e    Metrics
-	}{{"M1", "M2", Metrics{T1: 2}}, {"M10", "M12", Metrics{B1: 2}}, {"M5", "M6", Metrics{E2: 2}}} {
+		a, b      string
+		indicator string
+		bonus     float64
+	}{{"M1", "M2", "T1", 2}, {"M10", "M12", "B1", 2}, {"M5", "M6", "E2", 2}} {
 		if _, ok := lookup[s.a]; ok {
 			if _, ok2 := lookup[s.b]; ok2 {
-				d, _ := findDistrict(lookup[s.a].DistrictID)
-				add(&after[d], s.e, 1)
+				districtID := ""
+				switch s.a {
+				case "M1":
+					districtID = lookup["M1"].DistrictID
+				case "M10":
+					districtID = lookup["M10"].DistrictID
+				case "M5":
+					districtID = lookup["M5"].DistrictID
+				}
+				if districtID == "" {
+					continue
+				}
+				d, found := findDistrict(districtID)
+				if !found {
+					continue
+				}
+				synergies = append(synergies, Synergy{Initiatives: []string{s.a, s.b}, District: districtID, Indicator: s.indicator, Bonus: s.bonus})
+				switch s.indicator {
+				case "T1":
+					after[d].T1 += s.bonus
+				case "B1":
+					after[d].B1 += s.bonus
+				case "E2":
+					after[d].E2 += s.bonus
+				}
 			}
 		}
 	}
@@ -236,10 +289,30 @@ func Simulate(choices []Choice) (Result, error) {
 		clip(&after[i])
 	}
 	score, crit := cityScore(after)
-	base, _ := cityScore(before)
-	r := Result{Budget: Budget, Spent: spent, Remaining: Budget - spent, Score: round(score), BaselineScore: round(base), Delta: round(score - base), CriticalCount: crit}
+	baseScore, baseCrit := cityScore(before)
+	r := Result{
+		Budget:           Budget,
+		Spent:            spent,
+		Remaining:        Budget - spent,
+		Score:            round(score),
+		BaselineScore:    round(baseScore),
+		Delta:            round(score - baseScore),
+		CriticalCount:    crit,
+		BaselineCritical: baseCrit,
+		Selected:         append([]Choice(nil), choices...),
+		Valid:            true,
+		Synergies:        synergies,
+	}
 	for i, d := range Districts {
-		r.Districts = append(r.Districts, DistrictResult{d.ID, d.Name, before[i], after[i], round(districtScore(after[i]))})
+		r.Districts = append(r.Districts, DistrictResult{
+			ID:              d.ID,
+			Name:            d.Name,
+			PopulationShare: d.Population,
+			Before:          before[i],
+			After:           after[i],
+			Score:           round(districtScore(after[i])),
+			Delta:           round(districtScore(after[i]) - districtScore(before[i])),
+		})
 	}
 	r.explain()
 	return r, nil
@@ -248,7 +321,11 @@ func round(v float64) float64 { return math.Round(v*100) / 100 }
 func (r *Result) explain() {
 	sorted := append([]DistrictResult{}, r.Districts...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Score < sorted[j].Score })
-	r.Risks = []string{fmt.Sprintf("Самый уязвимый район — %s (%.2f).", sorted[0].Name, sorted[0].Score)}
+	if len(sorted) > 0 {
+		r.Risks = []string{fmt.Sprintf("Самый уязвимый район — %s (%.2f).", sorted[0].Name, sorted[0].Score)}
+	} else {
+		r.Risks = []string{"Нет данных по районам."}
+	}
 	if r.CriticalCount > 0 {
 		r.Risks = append(r.Risks, fmt.Sprintf("Критических показателей ниже 40: %d; они снижают итоговый балл.", r.CriticalCount))
 	}

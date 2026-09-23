@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"akim-na-5-chasov/backend/internal/openai"
 	"akim-na-5-chasov/backend/internal/simulation"
 )
 
@@ -25,6 +28,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	var aiClient *openai.Client
+	if client, err := openai.NewClientFromEnv(); err == nil {
+		aiClient = client
+	} else {
+		log.Printf("AI analysis disabled: %v", err)
+	}
+
 	mux.Handle("GET /", http.FileServer(http.FS(webRoot)))
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
 		jsonResponse(w, 200, map[string]any{"budget": simulation.Budget, "districts": simulation.Districts, "initiatives": simulation.Initiatives, "directions": simulation.Directions()})
@@ -43,6 +54,27 @@ func main() {
 			return
 		}
 		jsonResponse(w, 200, out)
+	})
+	mux.HandleFunc("POST /api/analyze", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Result simulation.Result `json:"result"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonResponse(w, 400, map[string]string{"error": "некорректный JSON"})
+			return
+		}
+		if aiClient == nil {
+			jsonResponse(w, 200, map[string]any{"ok": false, "error": "AI analysis is temporarily unavailable."})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		analysis, err := aiClient.Analyze(ctx, body.Result)
+		if err != nil {
+			jsonResponse(w, 200, map[string]any{"ok": false, "error": "AI analysis is temporarily unavailable."})
+			return
+		}
+		jsonResponse(w, 200, map[string]any{"ok": true, "analysis": analysis})
 	})
 	port := os.Getenv("PORT")
 	if port == "" {
