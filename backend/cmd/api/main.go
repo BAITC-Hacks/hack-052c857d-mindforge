@@ -23,6 +23,9 @@ func jsonResponse(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func main() {
+	if err := loadDotEnv(".env"); err != nil {
+		log.Fatalf("cannot load .env: %v", err)
+	}
 	mux := http.NewServeMux()
 	webRoot, err := fs.Sub(webFiles, "web")
 	if err != nil {
@@ -38,7 +41,8 @@ func main() {
 
 	mux.Handle("GET /", http.FileServer(http.FS(webRoot)))
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, 200, map[string]any{"budget": simulation.Budget, "districts": simulation.Districts, "initiatives": simulation.Initiatives, "directions": simulation.Directions()})
+		aiEnabled := aiClient != nil
+		jsonResponse(w, 200, map[string]any{"budget": simulation.Budget, "districts": simulation.Districts, "initiatives": simulation.Initiatives, "directions": simulation.Directions(), "ai_enabled": aiEnabled})
 	})
 	mux.HandleFunc("POST /api/simulate", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
